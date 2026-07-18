@@ -1,0 +1,37 @@
+[project]
+name = "ibkr-eu-trader"
+version = "0.1.0"
+description = "LLM-agent-driven research and trading tool for Interactive Brokers, scoped to EUR-denominated markets."
+requires-python = ">=3.11"
+dependencies = [
+    "anthropic>=0.116.0",
+    "ib_async>=2.0",
+    "pandas>=2.0.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "black>=25.0.0",
+    "ruff>=0.8.0",
+]
+
+[project.scripts]
+ibkr-eu-trader = "agent.loop:main"
+commit-mandate = "cli.commit_mandate:main"
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["agent*", "ibkr*", "strategy*", "backtest*", "safety*", "cli*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["unit: fast unit tests, no network or TWS connection"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
