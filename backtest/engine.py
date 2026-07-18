@@ -4,9 +4,10 @@ Vibe-Trading's equivalent engine is named "global" but only actually
 branches cost/lot-size assumptions for US vs. HK — anything else (including
 Xetra) silently gets US-style zero-commission, fractional-share assumptions,
 which understates costs and can make a strategy look profitable when it
-wouldn't be. This engine has exactly one cost model (Xetra-style: fixed +
-percentage commission, whole-share lots, EUR-denominated) and refuses to run
-rather than silently defaulting when given a market it doesn't recognize.
+wouldn't be. This engine has exactly one cost model (Xetra-style: percentage
+commission with a per-order minimum, whole-share lots, EUR-denominated) and
+refuses to run rather than silently defaulting when given a market it
+doesn't recognize.
 """
 
 from __future__ import annotations
@@ -23,12 +24,17 @@ class UnsupportedMarketError(RuntimeError):
     """Raised instead of silently applying the wrong cost model."""
 
 
-# Approximate Xetra/German-broker-typical cost shape. NOT calibrated against
-# a real broker fee schedule yet — replace with your actual IBKR commission
-# tier before trusting backtest results. Deliberately conservative (a real
-# schedule is very unlikely to be cheaper than this).
-DEFAULT_COMMISSION_FIXED_EUR = 4.0
-DEFAULT_COMMISSION_PCT = 0.001  # 10 bps
+# IBKR's own published "Fixed" pricing plan for Xetra (interactivebrokers.com/
+# en/pricing/commissions-stocks-europe.php, cross-checked against blick.de's
+# summary of the same table since the official page blocks automated
+# fetches): 0.05% of trade value, EUR 3.00 minimum per order, all-inclusive
+# (no separate exchange/clearing pass-through on this plan). IBKR's "Tiered"
+# plan is cheaper at high volume but adds exchange fees separately — this
+# engine models Fixed, the simpler and more conservative of the two. Confirm
+# against your own account's actual commission report before trusting
+# backtest P&L, since IBKR does periodically revise its published rates.
+DEFAULT_COMMISSION_MIN_EUR = 3.0
+DEFAULT_COMMISSION_PCT = 0.0005  # 0.05%
 SUPPORTED_EXCHANGES = frozenset({"IBIS", "FWB", "SWB"})  # Xetra, Frankfurt, Stuttgart
 
 
@@ -37,7 +43,7 @@ class BacktestConfig:
     exchange: str = "IBIS"
     currency: str = "EUR"
     initial_capital_eur: float = 100_000.0
-    commission_fixed_eur: float = DEFAULT_COMMISSION_FIXED_EUR
+    commission_min_eur: float = DEFAULT_COMMISSION_MIN_EUR
     commission_pct: float = DEFAULT_COMMISSION_PCT
 
     def __post_init__(self) -> None:
@@ -102,7 +108,11 @@ def run_backtest(
             if delta_shares == 0:
                 continue
             trade_notional = abs(delta_shares) * price
-            commission = cfg.commission_fixed_eur + trade_notional * cfg.commission_pct
+            # IBKR's Fixed plan charges whichever is greater — the percentage
+            # rate or the flat minimum — not both added together. (Original
+            # version of this engine wrongly summed them; fixed after
+            # checking IBKR's actual published pricing table.)
+            commission = max(cfg.commission_min_eur, trade_notional * cfg.commission_pct)
             cash -= delta_shares * price + commission
             shares[s] = target_shares
             turnover_eur += trade_notional
