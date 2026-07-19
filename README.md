@@ -69,3 +69,32 @@ yet built. Do not point this at a live account.
 
 Every write-capable tool routes through `safety/gate.py::execute_live_order`
 — there is no path that reaches IBKR without passing the gate first.
+
+## Taxes
+
+German capital gains tax (Abgeltungsteuer) is **not** included in the
+backtest's core cost model the way commissions are — tax isn't a
+deterministic per-trade cost, it's computed on net *annual* realized gains
+after loss offsetting, and depends on a personal allowance. Instead, every
+backtest run also writes `artifacts/tax_estimate.csv` via `backtest/tax.py`,
+a clearly-separate, opt-out-able estimate:
+
+- **Rate**: 25% Abgeltungsteuer + 5.5% Solidaritätszuschlag on that tax =
+  **26.375%** combined (excludes Kirchensteuer/church tax by default —
+  pass a higher `tax_rate` to `estimate_after_tax_returns` to include it).
+- **Sparerpauschbetrag**: EUR 1,000/year tax-free allowance (single filer;
+  2,000 EUR married/joint), applied per year after netting.
+- **Annual netting + loss carryforward**: losses offset gains within the
+  same year; any unused loss carries forward to reduce future years'
+  taxable gains (Verlustvortrag) — not just a flat per-trade deduction.
+- Cost basis is tracked with the **moving-average method**
+  (`gleitender Durchschnittspreis`), matching how German Depot tax
+  accounting actually works — not FIFO.
+
+**IBKR-specific**: unlike a German bank, IBKR does not withhold this tax at
+source for German tax residents. You are personally responsible for
+declaring capital gains yourself via **Anlage KAP** in your annual tax
+return, using IBKR's own year-end tax certificate. `tax_estimate.csv` is a
+strategy-comparison aid, not a substitute for that certificate or for
+advice from a Steuerberater — always verify against your own account's
+actual figures before relying on it for anything real.
