@@ -1,10 +1,11 @@
 # ibkr-eu-trader
 
 An LLM-agent-driven research and trading tool for **Interactive Brokers**,
-scoped to **EUR-denominated markets** (Xetra / Frankfurt / Stuttgart to
-start). You chat with an agent that can research symbols, backtest
-strategies, and — only once you've explicitly committed a mandate — place
-real orders through IBKR, gated by a mandate + kill-switch + audit system.
+scoped to **EUR-denominated markets**: Xetra, Frankfurt, Stuttgart, Euronext
+Paris/Amsterdam/Brussels, and Borsa Italiana (Milan). You chat with an agent
+that can research symbols, backtest strategies, and — only once you've
+explicitly committed a mandate — place real orders through IBKR, gated by a
+mandate + kill-switch + audit system.
 
 ## Why this exists
 
@@ -22,9 +23,10 @@ agent/      Tool Runner wiring (client.beta.messages.tool_runner) + one
             @beta_tool function per tradeable action. No general filesystem
             or shell access — a curated, narrow tool surface only.
 ibkr/       Connection pooling, contract qualification, market data,
-            order mechanics. Talks to TWS/IB Gateway via ib_async.
+            fundamentals (Reuters XML via reqFundamentalData), order
+            mechanics. Talks to TWS/IB Gateway via ib_async.
 strategy/   The SignalEngine contract: generate(data_map) -> signals.
-backtest/   Xetra/EUR-correct cost model. run_dir in, artifacts out.
+backtest/   EUR/Western-Europe-correct cost model. run_dir in, artifacts out.
 safety/     Mandate (immutable, human-committed-only), kill switch
             (sentinel file), audit ledger (append-only JSONL), and the
             one gate function every order must pass through.
@@ -49,10 +51,44 @@ of what this app or your mandate allow. See `.env.example` for details.
 
 ## Status
 
-Early scaffold — directory structure, core type definitions (`SignalEngine`
-protocol, `Mandate` model), and safety-layer skeleton are in place. Connector
-mechanics, the backtest engine, and the agent tool implementations are not
-yet built. Do not point this at a live account.
+Core layers are implemented and unit-tested against mocked IBKR/data
+inputs: the safety gate, the backtest engine (cost model, tax estimate,
+market allowlist), and the agent tool wiring. None of it has been run
+against a real TWS/IB Gateway session from this environment — that
+verification has to happen on your end. Do not point this at a live
+account until you've validated the full backtest → paper-order →
+paper-cancel round trip yourself.
+
+## Markets
+
+```
+Exchange    Venue                    Transaction tax on top of commission
+IBIS        Xetra                    none
+FWB         Frankfurt                none
+SWB         Stuttgart                none
+AEB         Euronext Amsterdam       none
+ENEXT.BE    Euronext Brussels        none (Belgian TOB is residency-based, doesn't apply to a German trader)
+SBF         Euronext Paris           French FTT: 0.4% on purchases of qualifying stocks (>EUR 1bn mkt cap)
+BVME        Borsa Italiana (Milan)   Italian FTT: 0.2% on purchases of qualifying stocks (>EUR 500m mkt cap)
+```
+
+`get_quote`/`get_historical_bars`/`get_fundamentals` work against any of
+these (or in principle any IBKR-reachable exchange, since those tools don't
+enforce an allowlist). The **backtest engine does**: it refuses to run on
+an unrecognized exchange or non-EUR currency, and for SBF/BVME it also
+refuses to run without an explicit `transaction_tax_pct` — the qualifying-
+company lists for both FTTs are republished annually by each country's tax
+authority, so this project doesn't hardcode one that could silently go
+stale. Pass `0.0` if your specific symbol doesn't currently qualify, or the
+current rate if it does; check before you rely on it for anything real.
+
+Fundamentals (`get_fundamentals`) come from IBKR's own Reuters-sourced
+`reqFundamentalData` — no second data vendor. It returns raw XML rather
+than a parsed schema, since report contents vary by report type and by
+symbol. Coverage depends on your account's market data entitlements; some
+report types (particularly full financial statements and analyst
+estimates) may require a paid Reuters Fundamentals subscription and may
+simply come back empty for accounts without it.
 
 ## Safety model
 

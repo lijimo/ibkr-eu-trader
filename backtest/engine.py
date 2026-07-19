@@ -1,13 +1,14 @@
-"""A single, EUR/Xetra-correct backtest engine.
+"""A single, EUR/Western-Europe-correct backtest engine.
 
 Vibe-Trading's equivalent engine is named "global" but only actually
 branches cost/lot-size assumptions for US vs. HK — anything else (including
 Xetra) silently gets US-style zero-commission, fractional-share assumptions,
 which understates costs and can make a strategy look profitable when it
-wouldn't be. This engine has exactly one cost model (Xetra-style: percentage
-commission with a per-order minimum, whole-share lots, EUR-denominated) and
-refuses to run rather than silently defaulting when given a market it
-doesn't recognize.
+wouldn't be. This engine has one cost model (IBKR Fixed-plan-style:
+percentage commission with a per-order minimum, whole-share lots,
+EUR-denominated, plus an explicit French/Italian transaction-tax hook where
+applicable) and refuses to run rather than silently defaulting when given a
+market it doesn't recognize.
 """
 
 from __future__ import annotations
@@ -24,18 +25,40 @@ class UnsupportedMarketError(RuntimeError):
     """Raised instead of silently applying the wrong cost model."""
 
 
-# IBKR's own published "Fixed" pricing plan for Xetra (interactivebrokers.com/
-# en/pricing/commissions-stocks-europe.php, cross-checked against blick.de's
-# summary of the same table since the official page blocks automated
-# fetches): 0.05% of trade value, EUR 3.00 minimum per order, all-inclusive
-# (no separate exchange/clearing pass-through on this plan). IBKR's "Tiered"
-# plan is cheaper at high volume but adds exchange fees separately — this
-# engine models Fixed, the simpler and more conservative of the two. Confirm
-# against your own account's actual commission report before trusting
-# backtest P&L, since IBKR does periodically revise its published rates.
+# IBKR's own published "Fixed" pricing plan for European stocks
+# (interactivebrokers.com/en/pricing/commissions-stocks-europe.php,
+# cross-checked against blick.de's summary of the same table since the
+# official page blocks automated fetches): 0.05% of trade value, EUR 3.00
+# minimum per order, all-inclusive (no separate exchange/clearing
+# pass-through on this plan). Confirmed to apply uniformly across Western
+# European venues, not just Xetra. IBKR's "Tiered" plan is cheaper at high
+# volume but adds exchange fees separately — this engine models Fixed, the
+# simpler and more conservative of the two. Confirm against your own
+# account's actual commission report before trusting backtest P&L, since
+# IBKR does periodically revise its published rates.
 DEFAULT_COMMISSION_MIN_EUR = 3.0
 DEFAULT_COMMISSION_PCT = 0.0005  # 0.05%
-SUPPORTED_EXCHANGES = frozenset({"IBIS", "FWB", "SWB"})  # Xetra, Frankfurt, Stuttgart
+
+# Xetra, Frankfurt, Stuttgart (Germany), Euronext Paris/Amsterdam/Brussels,
+# Borsa Italiana (Milan). No stock-level transaction tax applies to a German
+# tax resident on any of these except SBF and BVME (see
+# FTT_REQUIRED_EXCHANGES below) — Belgium's Taxe sur les Operations de Bourse
+# is charged based on the *investor's* tax residency, not the traded market,
+# so it does not apply here; the Netherlands has no such tax.
+SUPPORTED_EXCHANGES = frozenset({"IBIS", "FWB", "SWB", "SBF", "AEB", "ENEXT.BE", "BVME"})
+
+# France and Italy each levy a financial transaction tax on *purchases* of
+# large-cap domestic stocks, collected automatically by the executing broker
+# (IBKR) — French FTT: >EUR 1bn market cap, 0.4% as of 2025-04-01
+# (ibkrguides.com/kb/information-regarding-the-french-financial-transaction-tax.htm).
+# Italian FTT ("Tobin tax"): >EUR 500m market cap, 0.2% on regulated-market
+# trades as of 2026-01-01 (doubled from 0.1% by the 2026 Budget Law). Both
+# lists of qualifying companies are republished annually by each country's
+# tax authority — deliberately NOT hardcoded here since a baked-in list would
+# silently go stale. Backtesting these exchanges requires an explicit
+# `transaction_tax_pct` (0.0 if your specific symbol doesn't currently
+# qualify) rather than silently assuming zero.
+FTT_REQUIRED_EXCHANGES = frozenset({"SBF", "BVME"})
 
 
 @dataclass(frozen=True)
@@ -45,9 +68,11 @@ class BacktestConfig:
     initial_capital_eur: float = 100_000.0
     commission_min_eur: float = DEFAULT_COMMISSION_MIN_EUR
     commission_pct: float = DEFAULT_COMMISSION_PCT
+    transaction_tax_pct: float | None = None
 
     def __post_init__(self) -> None:
-        if self.exchange.strip().upper() not in SUPPORTED_EXCHANGES:
+        exchange = self.exchange.strip().upper()
+        if exchange not in SUPPORTED_EXCHANGES:
             raise UnsupportedMarketError(
                 f"backtest engine does not have a cost model for exchange={self.exchange!r}; "
                 f"supported: {sorted(SUPPORTED_EXCHANGES)}. Refusing to run with a "
@@ -56,6 +81,14 @@ class BacktestConfig:
         if self.currency.strip().upper() != "EUR":
             raise UnsupportedMarketError(
                 f"backtest engine is EUR-only; got currency={self.currency!r}"
+            )
+        if exchange in FTT_REQUIRED_EXCHANGES and self.transaction_tax_pct is None:
+            raise UnsupportedMarketError(
+                f"exchange={self.exchange!r} may levy a financial transaction tax on "
+                "purchases of qualifying large-cap stocks (France >EUR 1bn: 0.4%; "
+                "Italy >EUR 500m: 0.2%). Pass transaction_tax_pct explicitly (0.0 if "
+                "your symbol doesn't currently qualify) — refusing to silently assume "
+                "zero for a market where that assumption is often wrong."
             )
 
 
@@ -113,11 +146,24 @@ def run_backtest(
             # version of this engine wrongly summed them; fixed after
             # checking IBKR's actual published pricing table.)
             commission = max(cfg.commission_min_eur, trade_notional * cfg.commission_pct)
-            cash -= delta_shares * price + commission
+            # French/Italian FTT applies to purchases only, not sales.
+            transaction_tax = (
+                trade_notional * cfg.transaction_tax_pct
+                if delta_shares > 0 and cfg.transaction_tax_pct
+                else 0.0
+            )
+            cash -= delta_shares * price + commission + transaction_tax
             shares[s] = target_shares
             turnover_eur += trade_notional
             trade_rows.append(
-                {"date": dt, "symbol": s, "shares": delta_shares, "price": price, "commission": commission}
+                {
+                    "date": dt,
+                    "symbol": s,
+                    "shares": delta_shares,
+                    "price": price,
+                    "commission": commission,
+                    "transaction_tax": transaction_tax,
+                }
             )
 
         equity_curve[dt] = cash + sum(

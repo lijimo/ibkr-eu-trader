@@ -15,8 +15,10 @@ def get_quote(symbol: str, exchange: str = "IBIS", currency: str = "EUR") -> dic
 
     Args:
         symbol: The stock symbol, e.g. SAP.
-        exchange: IBKR exchange code. Default IBIS (Xetra). Other supported
-            values: FWB (Frankfurt), SWB (Stuttgart).
+        exchange: IBKR exchange code. Default IBIS (Xetra). Also supported:
+            FWB (Frankfurt), SWB (Stuttgart), SBF (Euronext Paris), AEB
+            (Euronext Amsterdam), ENEXT.BE (Euronext Brussels), BVME
+            (Borsa Italiana / Milan).
         currency: Contract currency. Default EUR.
     """
     return market_data.get_quote(symbol, exchange=exchange, currency=currency)
@@ -28,7 +30,10 @@ def get_historical_bars(symbol: str, exchange: str = "IBIS", currency: str = "EU
 
     Args:
         symbol: The stock symbol, e.g. SAP.
-        exchange: IBKR exchange code. Default IBIS (Xetra).
+        exchange: IBKR exchange code. Default IBIS (Xetra). Also supported:
+            FWB (Frankfurt), SWB (Stuttgart), SBF (Euronext Paris), AEB
+            (Euronext Amsterdam), ENEXT.BE (Euronext Brussels), BVME
+            (Borsa Italiana / Milan).
         currency: Contract currency. Default EUR.
         duration: IBKR duration string, e.g. "1 Y", "6 M", "30 D".
     """

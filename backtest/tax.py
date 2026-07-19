@@ -32,9 +32,10 @@ def _compute_realized_gains(trades: pd.DataFrame) -> pd.DataFrame:
     """One row per closing (sell) trade: {date, symbol, realized_gain_eur}.
 
     Tracks a moving-average cost basis per symbol. A buy rolls its
-    commission into the average cost; a sell realizes
-    ``(price - avg_cost) * |shares| - commission`` and leaves the average
-    cost of the remaining position unchanged.
+    commission (and, on French/Italian large-caps, transaction tax — both
+    are part of acquisition cost under German tax rules) into the average
+    cost; a sell realizes ``(price - avg_cost) * |shares| - commission`` and
+    leaves the average cost of the remaining position unchanged.
     """
     if trades.empty:
         return pd.DataFrame(columns=["date", "symbol", "realized_gain_eur"])
@@ -48,12 +49,13 @@ def _compute_realized_gains(trades: pd.DataFrame) -> pd.DataFrame:
         delta = trade["shares"]
         price = trade["price"]
         commission = trade["commission"]
+        transaction_tax = trade["transaction_tax"] if "transaction_tax" in trade else 0.0
         prior_shares = held.get(symbol, 0.0)
         prior_cost = avg_cost.get(symbol, 0.0)
 
         if delta > 0:
             new_shares = prior_shares + delta
-            total_cost = prior_shares * prior_cost + delta * price + commission
+            total_cost = prior_shares * prior_cost + delta * price + commission + transaction_tax
             avg_cost[symbol] = total_cost / new_shares if new_shares else 0.0
             held[symbol] = new_shares
         elif delta < 0:
